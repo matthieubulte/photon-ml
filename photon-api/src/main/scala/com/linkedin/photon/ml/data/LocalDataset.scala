@@ -188,39 +188,50 @@ object LocalDataset {
   protected[ml] def computePearsonCorrelationScore(
       labelAndFeatures: Array[(Double, Vector[Double])]): Map[Int, Double] = {
 
-    val featureLabelProductSums = mutable.Map[Int, Double]()
-    val featureFirstOrderSums = mutable.Map[Int, Double]()
-    val featureSecondOrderSums = mutable.Map[Int, Double]()
-    var labelFirstOrderSum = 0.0
-    var labelSecondOrderSum = 0.0
-    var numSamples = 0
+    val featureMeans = mutable.Map[Int, Double]()
+    var featureUnscaledVars = mutable.Map[Int, Double]()
+    var labelMean = 0.0
+    var labelUnscaledVar = 0.0
+    val unscaledCovariances = mutable.Map[Int, Double]()
     var interceptAdded = false
+    var numSamples = 0
 
     labelAndFeatures.foreach { case (label, features) =>
       numSamples += 1
-      labelFirstOrderSum += label
-      labelSecondOrderSum += label * label
+
+      val deltaLabel = label - labelMean
+      labelMean += deltaLabel / numSamples
+      labelUnscaledVar += deltaLabel * (label - labelMean)
+
       // Note that, if there is duplicated keys in the feature vector, then the following Pearson correlation scores
       // calculation will screw up
       features.activeIterator.foreach { case (key, value) =>
-        featureFirstOrderSums.update(key, featureFirstOrderSums.getOrElse(key, 0.0) + value)
-        featureSecondOrderSums.update(key, featureSecondOrderSums.getOrElse(key, 0.0) + value * value)
-        featureLabelProductSums.update(key, featureLabelProductSums.getOrElse(key, 0.0) + value * label)
+        val prevFeatureMean = featureMeans.getOrElse(key, 0.0)
+        val deltaFeature = value - prevFeatureMean
+        val featureMean = prevFeatureMean + deltaFeature / numSamples
+
+        val prevFeatureUnscaledVar = featureUnscaledVars.getOrElse(key, 0.0)
+        val featureUnscaledVar = prevFeatureUnscaledVar + (value - prevFeatureMean) * (value - featureMean)
+
+        val prevCovariance = unscaledCovariances.getOrElse(key, 0.0)
+        val unscaledCovariance = prevCovariance + deltaFeature * deltaLabel * (numSamples - 1) / numSamples
+
+        featureMeans.update(key, featureMean)
+        featureUnscaledVars.update(key, featureUnscaledVar)
+        unscaledCovariances.update(key, unscaledCovariance)
       }
     }
 
-    featureFirstOrderSums
+    val labelStd = math.sqrt(labelUnscaledVar / numSamples)
+
+    featureMeans
       .keySet
       .map { key =>
-        val featureFirstOrderSum = featureFirstOrderSums(key)
-        val featureSecondOrderSum = featureSecondOrderSums(key)
-        val featureLabelProductSum = featureLabelProductSums(key)
-        val numerator = numSamples * featureLabelProductSum - featureFirstOrderSum * labelFirstOrderSum
-        val std = math.sqrt(math.abs(numSamples * featureSecondOrderSum - featureFirstOrderSum * featureFirstOrderSum))
-        val denominator = std * math.sqrt(numSamples * labelSecondOrderSum - labelFirstOrderSum * labelFirstOrderSum)
+        val featureStd = math.sqrt(featureUnscaledVars(key) / numSamples)
+        val covariance = unscaledCovariances(key) / numSamples
 
         // When the standard deviation of the feature is close to 0, we treat it as the intercept term
-        val score = if (std < MathConst.EPSILON) {
+        val score = if (featureStd < MathConst.EPSILON) {
           if (interceptAdded) {
             0.0
           } else {
@@ -228,21 +239,18 @@ object LocalDataset {
             1.0
           }
         } else {
-          numerator / (denominator + MathConst.EPSILON)
+          covariance / (labelStd * featureStd + MathConst.EPSILON)
         }
 
         require(math.abs(score) <= 1 + MathConst.EPSILON,
           s"Computed pearson correlation score is $score, while the score's magnitude should be less than 1. " +
-          s"(Diagnosis:\n" +
-          s"numerator=$numerator\n" +
-          s"denominator=$denominator\n" +
-          s"numSamples=$numSamples\n" +
-          s"featureFirstOrderSum=$featureFirstOrderSum\n" +
-          s"featureSecondOrderSum=$featureSecondOrderSum\n" +
-          s"featureLabelProductSum=$featureLabelProductSum\n" +
-          s"labelFirstOrderSum=$labelFirstOrderSum\n" +
-          s"labelSecondOrderSum=$labelSecondOrderSum\n" +
-          s"labelAndFeatures used to compute Pearson correlation score:\n${labelAndFeatures.mkString("\n")}})")
+            s"(Diagnosis:\n" +
+            s"featureKey=$key\n"+
+            s"featureStd=$featureStd\n" +
+            s"labelStd=$labelStd\n" +
+            s"covariance=$covariance\n" +
+            s"numSamples=$numSamples\n" +
+            s"labelAndFeatures used to compute Pearson correlation score:\n${labelAndFeatures.mkString("\n")}})")
 
         (key, score)
       }

@@ -52,6 +52,31 @@ class LocalDatasetTest {
   }
 
   /**
+    * Test the Pearson correlation score numerical stability.
+    */
+  @Test(groups = Array[String]("testPearsonCorrelationScore", "testCore"))
+  def testPearsonCorrelationScoreStability(): Unit = {
+
+    // Test input data: this is a pathological example in which a naive algorithm would fail due to numerical
+    // unstability.
+    val labels = Array(10000000.0, 10000000.1, 10000000.2)
+    val features = Array(Vector(0.0), Vector(0.1), Vector(0.2))
+
+    val expected = Map(0 -> 1.0)
+
+    val labelAndFeatures = labels.zip(features)
+    val computed = LocalDataset.computePearsonCorrelationScore(labelAndFeatures)
+
+    computed.foreach { case (key, value) =>
+      assertEquals(
+        expected(key),
+        value,
+        CommonTestUtils.LOW_PRECISION_TOLERANCE,
+        s"Computed Pearson correlation score is $value, while the expected value is ${expected(key)}.")
+    }
+  }
+
+  /**
    * Test feature filtering using Pearson correlation score.
    */
   @Test(dependsOnGroups = Array[String]("testPearsonCorrelationScore", "testCore"))
